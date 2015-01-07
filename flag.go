@@ -68,10 +68,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/coreos/go-etcd/etcd"
 )
 
 // ErrHelp is the error returned if the flag -help is invoked but no such flag is defined.
@@ -815,6 +818,123 @@ func (f *FlagSet) Parse(arguments []string) error {
 	config_flag := f.actual["config"]
 	if config_flag != nil {
 		f.ParseFile(config_flag.Value.String())
+	}
+
+	// Parse configuration from etcd
+	etcd_address := f.actual["etcd-address"]
+	if etcd_address != nil {
+		f.ParseEtcd(etcd_address, f.actual["etcd-ca-file"], f.actual["etcd-cert-file"], f.actual["etcd-key-file"], f.actual["etcd-path"])
+	}
+
+	return nil
+}
+
+func (f *FlagSet) ParseEtcd(addressFlag *Flag, caFileFlag *Flag, certFileFlag *Flag, keyFileFlag *Flag, pathFlag *Flag) error {
+	// Prepare some local variables
+	var (
+		addresses []string
+		addressString string
+		caFile string
+		certFile string
+		keyFile string
+		path string
+	)
+
+	// Parse the flags
+	if addressFlag != nil {
+		addressString = addressFlag.Value.String()
+		addresses = strings.Split(addressString, ",")
+	}
+
+	if caFileFlag != nil {
+		caFile = caFileFlag.Value.String()
+	}
+
+	if certFileFlag != nil {
+		certFile = certFileFlag.Value.String()
+	}
+
+	if keyFileFlag != nil {
+		keyFile = keyFileFlag.Value.String()
+	}
+
+	if pathFlag != nil {
+		path = pathFlag.Value.String()
+	}
+
+	// Connect to the etcd server
+	var client *etcd.Client
+
+	if caFile != "" && certFile != "" && keyFile != "" {
+		var err error
+		client, err = etcd.NewTLSClient(addresses, certFile, keyFile, caFile)
+		if err != nil {
+			return f.failf("Unable to create a new TLS etcd client: %s", err.Error())
+		}
+	} else {
+		client = etcd.NewClient(addresses)
+	}
+
+	// Perform the checks
+	m := f.formal
+
+	for _, flag := range m {
+		name := flag.Name
+
+		_, set := f.actual[name]
+		if set {
+			continue
+		}
+
+		flag, alreadythere := m[name]
+		if !alreadythere {
+			if name == "help" || name == "h" { // special case for nice help message.
+				f.usage()
+				return ErrHelp
+			}
+			return f.failf("etcd setting provided but not defined: %s", name)
+		}
+
+		key := strings.ToLower(flag.Name)
+		key = strings.Replace(key, "-", "_", -1)
+
+		resp, err := client.Get(path + key, false, false)
+		if err != nil {
+			log.Print(err)
+			continue
+		}
+
+		value := resp.Node.Value
+
+		has_value := false
+		if len(value) > 0 {
+			has_value = true
+		}
+
+		if fv, ok := flag.Value.(boolFlag); ok && fv.IsBoolFlag() { // special case: doesn't need an arg
+		if has_value {
+			if err := fv.Set(value); err != nil {
+				return f.failf("invalid boolean value %q for etcd value %s: %v", value, name, err)
+			}
+			} else {
+				// flag without value is regarded a bool
+				fv.Set("true")
+			}
+			} else {
+				if !has_value {
+					return f.failf("environment variable needs an value: %s", name)
+				}
+
+				if err := flag.Value.Set(value); err != nil {
+					return f.failf("invalid value %q for etcd value %s: %v", value, name, err)
+				}
+			}
+
+			// update f.actual
+			if f.actual == nil {
+				f.actual = make(map[string]*Flag)
+			}
+			f.actual[name] = flag
 	}
 
 	return nil
