@@ -68,7 +68,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"log"
 	"sort"
 	"strconv"
 	"strings"
@@ -823,7 +822,13 @@ func (f *FlagSet) Parse(arguments []string) error {
 	// Parse configuration from etcd
 	etcd_address := f.actual["etcd-address"]
 	if etcd_address != nil {
-		f.ParseEtcd(etcd_address, f.actual["etcd-ca-file"], f.actual["etcd-cert-file"], f.actual["etcd-key-file"], f.actual["etcd-path"])
+		f.ParseEtcd(
+			etcd_address,
+			f.actual["etcd-ca-file"],
+			f.actual["etcd-cert-file"],
+			f.actual["etcd-key-file"],
+			f.actual["etcd-path"],
+		)
 	}
 
 	return nil
@@ -832,12 +837,12 @@ func (f *FlagSet) Parse(arguments []string) error {
 func (f *FlagSet) ParseEtcd(addressFlag *Flag, caFileFlag *Flag, certFileFlag *Flag, keyFileFlag *Flag, pathFlag *Flag) error {
 	// Prepare some local variables
 	var (
-		addresses []string
+		addresses     []string
 		addressString string
-		caFile string
-		certFile string
-		keyFile string
-		path string
+		caFile        string
+		certFile      string
+		keyFile       string
+		path          string
 	)
 
 	// Parse the flags
@@ -898,9 +903,16 @@ func (f *FlagSet) ParseEtcd(addressFlag *Flag, caFileFlag *Flag, certFileFlag *F
 		key := strings.ToLower(flag.Name)
 		key = strings.Replace(key, "-", "_", -1)
 
-		resp, err := client.Get(path + key, false, false)
+		resp, err := client.Get(path+key, false, false)
 		if err != nil {
-			log.Print(err)
+			etcdErr, ok := err.(*etcd.EtcdError)
+			if ok {
+				if etcdErr.ErrorCode != 100 {
+					return f.failf("etcd error: %s", err.Error())
+				}
+			} else {
+				return f.failf("not-related etcd error: %s", err.Error())
+			}
 			continue
 		}
 
@@ -912,29 +924,29 @@ func (f *FlagSet) ParseEtcd(addressFlag *Flag, caFileFlag *Flag, certFileFlag *F
 		}
 
 		if fv, ok := flag.Value.(boolFlag); ok && fv.IsBoolFlag() { // special case: doesn't need an arg
-		if has_value {
-			if err := fv.Set(value); err != nil {
-				return f.failf("invalid boolean value %q for etcd value %s: %v", value, name, err)
-			}
+			if has_value {
+				if err := fv.Set(value); err != nil {
+					return f.failf("invalid boolean value %q for etcd value %s: %v", value, name, err)
+				}
 			} else {
 				// flag without value is regarded a bool
 				fv.Set("true")
 			}
-			} else {
-				if !has_value {
-					return f.failf("environment variable needs an value: %s", name)
-				}
-
-				if err := flag.Value.Set(value); err != nil {
-					return f.failf("invalid value %q for etcd value %s: %v", value, name, err)
-				}
+		} else {
+			if !has_value {
+				return f.failf("environment variable needs an value: %s", name)
 			}
 
-			// update f.actual
-			if f.actual == nil {
-				f.actual = make(map[string]*Flag)
+			if err := flag.Value.Set(value); err != nil {
+				return f.failf("invalid value %q for etcd value %s: %v", value, name, err)
 			}
-			f.actual[name] = flag
+		}
+
+		// update f.actual
+		if f.actual == nil {
+			f.actual = make(map[string]*Flag)
+		}
+		f.actual[name] = flag
 	}
 
 	return nil
