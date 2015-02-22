@@ -820,14 +820,14 @@ func (f *FlagSet) Parse(arguments []string) error {
 	}
 
 	// Parse configuration from etcd
-	etcd_address := f.actual["etcd-address"]
+	etcd_address := f.actual["etcd_address"]
 	if etcd_address != nil {
 		f.ParseEtcd(
 			etcd_address,
-			f.actual["etcd-ca-file"],
-			f.actual["etcd-cert-file"],
-			f.actual["etcd-key-file"],
-			f.actual["etcd-path"],
+			f.actual["etcd_ca_file"],
+			f.actual["etcd_cert_file"],
+			f.actual["etcd_key_file"],
+			f.actual["etcd_path"],
 		)
 	}
 
